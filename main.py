@@ -407,7 +407,7 @@ if __name__ == "__main__":
     )
 
     # system.create_system()
-    system.load_system("protine.json")
+    system.load_system("examples/protine.json")
     
     t = time.time()
     n_steps = 62000
