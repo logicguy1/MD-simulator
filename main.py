@@ -9,12 +9,14 @@ import json
 
 
 F_fjedder = lambda dist, ang: (
-    np.cos(ang) * (-30*(3 - (dist) )), 
-    np.sin(ang) * (-30*(3 - (dist) )), 
+    np.cos(ang) * (-30 * (3 - dist)), 
+    np.sin(ang) * (-30 * (3 - dist)), 
 )
 
-F_lennard_x = lambda r_ij: 48 * ( (1/r_ij)**13 - 0.5 * (1/(r_ij))**7)
-F_lennard_y = lambda r_ij: 48 * ( (1/r_ij)**13 - 0.5 * (1/(r_ij))**7)
+F_lennard = lambda r_ij, ang: (
+    np.cos(ang) * (48 * ( (1/r_ij)**13 - 0.5 * (1/(r_ij))**7)), 
+    np.sin(ang) * (48 * ( (1/r_ij)**13 - 0.5 * (1/(r_ij))**7)), 
+)
 
 limit = lambda x, min_val, max_val: max(min(x, min_val), max_val)
 
@@ -29,7 +31,8 @@ class Particle:
         vx: float, 
         vy: float, 
         r: float, 
-        m = 1
+        m: int = 1,
+        connected: list = []
     ):
         self.n = n 
         self.system = system
@@ -40,12 +43,24 @@ class Particle:
         self.vy = vy 
         self.m = m
         self.r = r
+        self.connected = connected
 
         self.force_x = 0
         self.force_y = 0
+        self.old_forces = (0,0)
 
     def __repr__(self):
         return f"<Particle x.{self.x} y.{self.y}>"
+
+    def save_forces_old(self):
+        """Saves the old forces for used in velo verlet"""
+        self.old_forces = (
+            copy.copy(self.force_x), 
+            copy.copy(self.force_y)
+        )
+
+        self.force_x = 0
+        self.force_y = 0
 
     def get_dist(self, p):
         """Get the distance between two particles"""
@@ -86,27 +101,39 @@ class Particle:
             if self.y > self.system.width or self.y < 0:
                 self.vy *= -1
 
-    def lennard_jones(self, particles, box_width):
+    def lennard_jones(self, p):
         """Calculate the lennard jones potential for the particle in relation to all other particles"""
-        self.force_x = 0
-        self.force_y = 0
 
-        # Look at all particles that is not the one itself and within distance of one box width
-        for p in [
-            i for i in self.system.psudo_particles 
-            if i.n != self.n and self.get_dist(i) < box_width
-        ]:
-            r_ij = self.get_dist(p) 
-            if p.n != self.n + 1 and p.n != self.n - 1:
-                self.force_x += F_lennard_x(r_ij) * (-1 if self.x > p.x else 1)
-                self.force_y += F_lennard_y(r_ij) * (-1 if self.y > p.y else 1)
-                p.force_x    += F_lennard_x(r_ij) * (-1 if self.x < p.x else 1)
-                p.force_y    += F_lennard_y(r_ij) * (-1 if self.y < p.y else 1)
+        # Check if the two particles are bonded already
+        if p.n not in self.connected and self.n not in p.connected:
+            # Get the closest particle that is to self with the same n, if using psudo particles it may return a psudo particle
+            min_dist = sorted(
+                [
+                    (i, i.get_dist(self)) 
+                    for i in self.system.psudo_particles 
+                    if i.n == p.n
+                ],
+                key=lambda x: x[1]
+            )[0][0]
+
+            # Calculate distance and angle to the paticle and then
+            # calculate the lennard jones induced forces for x and y components
+            lennard_force = F_lennard(
+                self.get_dist(min_dist), 
+                abs(self.get_angle(min_dist))
+            )
+
+            # Apply the forces
+            self.force_x += lennard_force[0] * (1 if self.x > min_dist.x else -1)
+            self.force_y += lennard_force[1] * (1 if self.y > min_dist.y else -1)
+            p.force_x    -= lennard_force[0] * (1 if self.x > min_dist.x else -1)
+            p.force_y    -= lennard_force[1] * (1 if self.y > min_dist.y else -1)
 
     def spring_forces(self):
         """Kovelente bonds between molecules, to enable set n to be one higher than the current molecule"""
         for p in self.system.particles:
-            if p.n == self.n + 1:
+            if p.n in self.connected or self.n in p.connected:
+                # Get the closest particle that is the bond, if using psudo particles it may return a psudo particle
                 min_dist = sorted(
                     [
                         (i, i.get_dist(self)) 
@@ -114,37 +141,19 @@ class Particle:
                         if i.n == p.n
                     ],
                     key=lambda x: x[1]
-                )
+                )[0][0]
                 
-                ang = self.get_angle(min_dist[0][0])
+                # Calculate the ang and get the forces
                 spring_force = F_fjedder(
-                    self.get_dist(min_dist[0][0]), 
-                    abs(ang)
+                    self.get_dist(min_dist), 
+                    abs(self.get_angle(min_dist))
                 )
 
-                self.force_x += spring_force[0] * (-1 if self.x > p.x else 1)
-                self.force_y += spring_force[1] * (-1 if self.y > p.y else 1)
-                p.force_x    += spring_force[0] * (-1 if self.x < p.x else 1)
-                p.force_y    += spring_force[1] * (-1 if self.y < p.y else 1)
-
-                break
-
-    def velo_verlet(self, dt: float, box_width: int, particles):
-        """Apply the velo verlet solver to this particle, this will update everything considerd related to the particle"""
-        self.move(dt)
-
-        old_forces = (
-            copy.copy(self.force_x), 
-            copy.copy(self.force_y)
-        )
-
-        self.lennard_jones(particles, box_width)
-        self.spring_forces()
-
-        self.vx += 0.5 * dt * (old_forces[0] + self.force_x)
-        self.vy += 0.5 * dt * (old_forces[1] + self.force_y)
-
-        self.check_bounding()
+                # Apply the forces
+                self.force_x += spring_force[0] * (-1 if self.x > min_dist.x else 1)
+                self.force_y += spring_force[1] * (-1 if self.y > min_dist.y else 1)
+                p.force_x    -= spring_force[0] * (-1 if self.x > min_dist.x else 1)
+                p.force_y    -= spring_force[1] * (-1 if self.y > min_dist.y else 1)
 
 
 class System:
@@ -198,12 +207,12 @@ class System:
                 self.particles.append(
                     Particle(
                         system = self,
-                        n = n,
+                        n = n*2,
                         x = x / sqrt_npart * (self.width * 0.9) + self.width * 0.1,
                         y = y / sqrt_npart * (self.width * 0.9) + self.width * 0.1,
                         vx = self.speed_scale * 2 * (np.random.random()-0.5),
                         vy = self.speed_scale * 2 * (np.random.random()-0.5),
-                        r = .4
+                        r = .5
                     )
                 )
                 n += 1
@@ -216,16 +225,19 @@ class System:
         with open(filename, "r") as file:
             data = json.load(file)
 
+        scale = 20
+
         for i in data:
             self.particles.append(
                 Particle(
                     system = self,
                     n = i["n"],
-                    x = i["x"]-10,
-                    y = i["y"]-10,
+                    x = i["x"],
+                    y = i["y"],
                     vx = i["vx"],
                     vy = i["vy"],
-                    r = i["r"]
+                    r = i["r"] / 2,
+                    connected = i["connected"]
                 )
             )
 
@@ -274,14 +286,51 @@ class System:
                 i.move(self.dt)
                 p.move(self.dt)
 
+    def set_temperature(self, T_desired):
+        vx = np.array([p.vx for p in self.particles])
+        vy = np.array([p.vy for p in self.particles])
+
+        # Set mass
+        mass = 1.6735575*10**(-27)
+        boltzmann = 1.380649*10**(-23)
+        #First measure the temperature
+        T_actual = 1/2 * mass * (np.mean(vx**2) + np.mean(vy**2)) / boltzmann * 25 * 10**5 
+
+        c = np.sqrt(T_desired / T_actual)
+
+        for p in self.particles:
+            p.vx *= c
+            p.vy *= c
+
     def step(self):
-        """Step the simulation one dt"""
+        """Apply the velo verlet solver to the system"""
         self.generate_psudo()
         self.simcount += 1
 
+        # Move the particles and save their old forces
         for p in self.particles:
+            # Check if two particles have collided
             self.collision(particle = p)
-            p.velo_verlet(dt=self.dt, box_width=self.width, particles=system.particles)
+            p.move(self.dt)
+            p.save_forces_old()
+
+        # Apply all forces to the particles
+        for p1 in self.particles:
+            for p2 in self.particles:
+                if p1.n > p2.n:
+                    p1.lennard_jones(p2)
+            p1.spring_forces()
+
+        # Once all the new particles have been formed find the new veloceties
+        for p in self.particles:
+            p.vx += 0.5 * self.dt * (p.old_forces[0] + p.force_x)
+            p.vy += 0.5 * self.dt * (p.old_forces[1] + p.force_y)
+
+            # Check if the particles has reacted one of the bounding borders
+            p.check_bounding()
+
+        system.set_temperature(95)
+
 
     def save(self, filename='pointplot.png'):
         """Create an image from the position of all particles."""
@@ -292,12 +341,12 @@ class System:
         
         # Lennard-jones petential overlay
         if self.lennard_jones_overlay: 
-            for r in range(9*4, 0, -1):
-                p = self.particles[1]
-                r = r/4 + p.r
-                mult = F_lennard_x(r)
+            for r in range(9*5, 0, -1):
+                p = self.particles[0]
+                r = r/5 + p.r
+                mult = F_lennard(r, 0)[0]
                 if mult < 0:
-                    color = (0, round((abs(mult)*10)), 0)
+                    color = (0, round((abs(mult)*20)), 0)
                 else:
                     color = (round((abs(mult))), 0, 0)
 
@@ -310,30 +359,27 @@ class System:
                     outline=color
                 )
 
-        particle_collection = self.psudo_particles
-        for i, p in enumerate(particle_collection):
-            try:
-                if particle_collection[i+1].n == p.n + 1:
+        for i in self.particles:
+            for j in self.particles:
+                if i.n in j.connected or j.n in i.connected:
                     min_dist = sorted(
                         [
-                            (x, x.get_dist(p)) 
-                            for x in self.psudo_particles 
-                            if x.n == particle_collection[i+1].n
-                        ], 
+                            (i, i.get_dist(j)) 
+                            for i in self.psudo_particles 
+                            if i.n == j.n
+                        ],
                         key=lambda x: x[1]
-                    )
+                    )[0][0]
 
                     draw.line(
                         (
-                            p.x * scale, p.y * scale, 
-                            min_dist[0][0].x * scale, min_dist[0][0].y * scale
+                            i.x * scale, i.y * scale, 
+                            min_dist.x * scale, min_dist.y * scale
                         ), 
                         fill=(0,255,0)
                     )
-            except IndexError:
-                pass
 
-        for i, p in enumerate(particle_collection):
+        for i, p in enumerate(self.psudo_particles):
             color = (0, 155, 155)
 
             # Draw the circle on the canvas
@@ -348,7 +394,14 @@ class System:
 
         draw.text(
             (30, 30),
-            f"Iteration {self.simcount}\ndt: {self.dt}\n{self.frame_rate} FPS\nSystem: Protine 1 (test)",
+            f"""Iteration {self.simcount}
+dt: {self.dt}
+{self.frame_rate} FPS 
+System: Protine 1 (test) 
+dist: {self.particles[0].get_dist(self.particles[1])}
+forceX: {F_lennard(self.particles[0].get_dist(self.particles[1]), self.particles[0].get_angle(self.particles[1]))[0]}
+forceY: {F_lennard(self.particles[0].get_dist(self.particles[1]), self.particles[0].get_angle(self.particles[1]))[1]}
+""",
             (200,200,200)
         )
 
@@ -394,30 +447,31 @@ class System:
 
 if __name__ == "__main__":
     system = System(
-        n_particles = 16, 
+        n_particles = 20, 
         width = 45, 
-        dt = 0.002, 
+        dt = 0.001, 
         speed_scale = 1,
-        borders = False,
+        borders = True,
 
         # Drawing based settings
-        kovelent_lines = True,
+        kovelent_lines = False,
         lennard_jones_overlay = False,
         frame_rate = 60
     )
 
-    # system.create_system()
+    #system.create_system()
+    #system.load_system("examples/2particles.json")
     system.load_system("examples/protine.json")
     
     t = time.time()
-    n_steps = 62000
+    n_steps = 70000
     n_frame = 0
     for i in range(n_steps):
         s = time.time()
         system.step()
 
         # Save every 40 tick cycle
-        if i % 40 == 0:
+        if i % 50 == 0:
             # Cool progress bar
             print(
                 "\r#", 
