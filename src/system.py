@@ -1,16 +1,10 @@
-import numpy as np
-import copy
-import time
-import os
-import copy
-import cv2
-from PIL import Image, ImageDraw
 import json
+import time
+import copy
+import numpy as np
 
-
-
-limit = lambda x, min_val, max_val: max(min(x, min_val), max_val)
-
+from particle import Particle
+from video import Video
 
 class System:
     def __init__(
@@ -19,6 +13,7 @@ class System:
         lennard_jones_overlay: bool = False, 
         frame_rate: int= 30
     ):
+        # Initial system parameters, gets overwritten after initialisation
         self.n_particles = 10
         self.width = 20
         self.dt = 0.001
@@ -29,12 +24,16 @@ class System:
         self.name = "" # Used in rendering
         self.simcount = 0
 
-        self.kovelent_lines = kovelent_lines,
-        self.lennard_jones_overlay = lennard_jones_overlay,
+        # Rendering based settings
+        self.kovelent_lines = kovelent_lines
+        self.lennard_jones_overlay = lennard_jones_overlay
         self.frame_rate = frame_rate
 
+        # Variables used internally
         self.particles = []
         self.psudo_particles = []
+
+        self.video = Video()
 
     def __repr__(self):
         out = ""
@@ -85,17 +84,18 @@ class System:
         self.T = data.get("T")
         self.borders = data.get("hideBorders")
 
-        for i in data.get("particles"):
+        for i in data.get("particles") or []:
             self.particles.append(
                 Particle(
                     system = self,
-                    n = i["n"],
-                    x = i["x"],
-                    y = i["y"],
-                    vx = i["vx"],
-                    vy = i["vy"],
-                    r = i["r"] / 2.5,
-                    connected = i["connected"]
+                    n         = i.get("n"),
+                    x         = i.get("x"),
+                    y         = i.get("y"),
+                    vx        = i.get("vx"),
+                    vy        = i.get("vy"),
+                    r         = (i.get("r") or 1) / 2.5,
+                    charge    = i.get("charge") or 0,
+                    connected = i.get("connected") or []
                 )
             )
 
@@ -132,7 +132,7 @@ class System:
         p = particle
         for i in [i for i in psudo_particles if i.n != p.n and p.get_dist(i) < self.width]:
             l = np.sqrt((i.x-p.x)**2 + (i.y-p.y)**2)
-            if l < i.r + p.r:
+            if l < i.r + p.r and i.x < p.x:
                 vi = (i.vx, i.vy)
                 vp = (p.vx, p.vy)
 
@@ -180,6 +180,7 @@ class System:
             for p2 in self.particles:
                 if p1.n > p2.n:
                     p1.lennard_jones(p2)
+                    p1.columb_forces(p2)
             p1.spring_forces()
 
         # Once all the new particles have been formed find the new veloceties
@@ -190,80 +191,7 @@ class System:
             # Check if the particles has reacted one of the bounding borders
             p.check_bounding()
 
-        system.set_temperature(self.T)
-
-
-    def save(self, filename='pointplot.png'):
-        """Create an image from the position of all particles."""
-        scale = 20
-
-        img = Image.new("RGB", (self.width * scale, self.width * scale), "black")
-        draw = ImageDraw.Draw(img)
-        
-        # Lennard-jones petential overlay
-        if self.lennard_jones_overlay and False: 
-            for r in range(9*5, 0, -1):
-                p = self.particles[0]
-                r = r/5 + p.r
-                mult = F_lennard(r, 0)[0]
-                if mult < 0:
-                    color = (0, round((abs(mult)*20)), 0)
-                else:
-                    color = (round((abs(mult))), 0, 0)
-
-                draw.ellipse(
-                    [
-                        (round(p.x * scale - r * scale), round(p.y * scale - r * scale)),
-                        (round(p.x * scale + r * scale), round(p.y * scale + r * scale))
-                    ], 
-                    fill=color, 
-                    outline=color
-                )
-
-        for i in self.particles:
-            for j in self.particles:
-                if i.n in j.connected or j.n in i.connected:
-                    min_dist = sorted(
-                        [
-                            (x, x.get_dist(i)) 
-                            for x in self.psudo_particles 
-                            if x.n == j.n
-                        ],
-                        key=lambda x: x[1]
-                    )[0][0]
-
-                    draw.line(
-                        (
-                            i.x * scale, i.y * scale, 
-                            min_dist.x * scale, min_dist.y * scale
-                        ), 
-                        fill=(0,255,0)
-                    )
-
-        for i, p in enumerate(self.psudo_particles):
-            color = (0, 155, 155)
-
-            # Draw the circle on the canvas
-            draw.ellipse(
-                [
-                    (p.x * scale - p.r * scale, p.y * scale - p.r * scale),
-                    (p.x * scale + p.r * scale, p.y * scale + p.r * scale)
-                ], 
-                fill=color, 
-                outline=color
-            )
-
-        draw.text(
-            (30, 30),
-            f"""Iteration {self.simcount}
-dt: {self.dt}
-{self.frame_rate} FPS 
-System: {self.name}
-""",
-            (200,200,200)
-        )
-
-        img.save(filename)
+        self.set_temperature(self.T)
 
     def simulate(self):
         t = time.time()
@@ -285,104 +213,6 @@ System: {self.name}
                     round(i/self.n_steps*100), "%", 
                     end = "", flush = True
                 )
-                self.save(f"frames/{n_frame}.png")
+                self.video.save(self, f"frames/{n_frame}.png")
                 n_frame += 1
-
-    def animate(self):
-        """Combines all pictures from the 'save' method into a playable avi video"""
-        print("\nWriting video\n")
-        image_folder = 'frames'
-        video_name = 'video.avi'
-
-        images = [img for img in os.listdir(image_folder) if img.endswith(".png")]
-        new_img = []
-
-        for i in range(len(images)):
-            new_img.append(f"frames/{i}.png")
-
-        frame = cv2.imread(os.path.join(image_folder, images[0]))
-        height, width, layers = frame.shape
-
-        video = cv2.VideoWriter(video_name, 0, self.frame_rate, (width,height))
-
-        for i, image in enumerate(new_img):
-            video.write(cv2.imread(image))
-            os.remove(image)
-            print("\rPlease wait", "".join([
-                " " if i % 10 != 0 else ".", 
-                " " if i % 10 != 1 else ".", 
-                " " if i % 10 != 2 else ".", 
-                " " if i % 10 != 3 else ".", 
-                " " if i % 10 != 4 else ".", 
-                " " if i % 10 != 5 else ".", 
-                " " if i % 10 != 6 else ".", 
-                " " if i % 10 != 7 else ".", 
-                " " if i % 10 != 8 else ".", 
-                " " if i % 10 != 9 else ".", 
-            ]), end = "", flush = True)
-
-        cv2.destroyAllWindows()
-        video.release()
-        print("\nDone")
-
-system = System(
-    # Drawing based settings
-    kovelent_lines = False,
-    lennard_jones_overlay = False,
-    frame_rate = 60
-)
-
-system.load_system("examples/2particles.json")
-system.simulate()
-system.animate()
-
-
-
-
-if __name__ == "__main__" and False:
-    system = System(
-        n_particles = 20, 
-        width = 45, 
-        dt = 0.001, 
-        speed_scale = 1,
-        borders = True,
-
-        # Drawing based settings
-        kovelent_lines = False,
-        lennard_jones_overlay = False,
-        frame_rate = 60
-    )
-
-    #system.create_system()
-    #system.load_system("examples/2particles.json")
-    system.load_system("examples/protine.json")
-    
-    t = time.time()
-    n_steps = 150000
-    n_frame = 0
-    for i in range(n_steps):
-        s = time.time()
-        system.step()
-
-        # Save every 40 tick cycle
-        if i % 50 == 0:
-            # Cool progress bar
-            print(
-                "\r#", 
-                str(i).zfill(5), 
-                round(s-t), 
-                "s |", 
-                "#"*(round(i/n_steps*40)), 
-                " "*(40-round(i/n_steps*40)), 
-                "|", round((s-t)/(i+1)*(n_steps-i)), 
-                "s", 
-                round(i/n_steps*100), 
-                "%", 
-                end = "", 
-                flush = True
-            )
-            system.save(f"frames/{n_frame}.png")
-            n_frame += 1
-
-    system.animate()
 

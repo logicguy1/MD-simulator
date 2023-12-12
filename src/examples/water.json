@@ -1,0 +1,41 @@
+{
+  "name": "Water molecyle",
+  "n_steps": 15000,
+  "dt": 0.001,
+  "size": 10,
+  "T": 20,
+  "hideBorders": false,
+
+  "particles": [
+    {
+      "n": 1,
+      "x": 4,
+      "y": 7,
+      "vx": 0,
+      "vy": 0,
+      "r": 1,
+      "charge": -1,
+      "connected": []
+    },
+    {
+      "n": 2,
+      "x": 6,
+      "y": 7,
+      "vx": 0,
+      "vy": 0,
+      "r": 1,
+      "charge": 1,
+      "connected": [1]
+    },
+    {
+      "n": 3,
+      "x": 5,
+      "y": 6,
+      "vx": 1,
+      "vy": 0,
+      "r": 1,
+      "charge": 1,
+      "connected": [1]
+    }
+  ]
+}
