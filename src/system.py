@@ -154,7 +154,7 @@ class System:
         # Set mass
         mass = 1.6735575*10**(-27)
         boltzmann = 1.380649*10**(-23)
-        #First measure the temperature
+        # First measure the temperature
         T_actual = 1/2 * mass * (np.mean(vx**2) + np.mean(vy**2)) / boltzmann * 25 * 10**5 
 
         c = np.sqrt(T_desired / T_actual)
