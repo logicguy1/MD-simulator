@@ -8,7 +8,7 @@ class Video:
         scale = 20
         rightbar = 170 
 
-        img = Image.new("RGB", (system.width * scale + rightbar, system.width * scale), "black")
+        img = Image.new("RGB", (system.width * scale + rightbar, system.width * scale), "white")
         draw = ImageDraw.Draw(img)
         
         for y in range(system.width):
@@ -86,7 +86,7 @@ class Video:
                 (0, 0),
                 (rightbar, system.width * scale),
             ],
-            fill = (0,0,0)
+            fill = "white"
         )
 
         # Text line seperator
@@ -105,7 +105,7 @@ dt: {system.dt}
 {system.frame_rate} FPS 
 System: {system.name}
 """,
-            (200,200,200)
+            (20,20,20)
         )
 
         img.save(filename)
